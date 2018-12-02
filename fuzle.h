@@ -1,36 +1,32 @@
 #pragma once
 
-// TODO: Either break out of ReadShort/Long chains on error or only show "not enough space" error once
-// TODO: Only store data that we actually need (but comment out rest so know what's there and how many bytes)
-
-#include <string>
 #include <fstream>
-#include <algorithm>
-#include <iterator>
 #include <cstring>
-#include <iomanip>
 #include <iostream>
-
 
 /* 
  * Contains all of the data from the xWMA (RIFF) header, up until the "data"
  * structure that contains the actual audio data.
+ *
+ * The commented out fields aren't needed in the duration calculations, but
+ * they are left in to show how many bytes are between each necessary field
+ * and to show what is in those bytes.
  */
 struct XwmaHeader {
-	unsigned long chunkSize;
-	unsigned char XWMA[4];			// "XWMA"
-	unsigned char subchunk1Id[4];	// "fmt "
-	unsigned long subchunk1Size;	// size of fmt chunk
-	unsigned short format;
+	//unsigned long chunkSize;
+	//unsigned char XWMA[4];         // "XWMA"
+	//unsigned char subchunk1Id[4];  // "fmt "
+	//unsigned long subchunk1Size;   // size of fmt chunk
+	//unsigned short format;
 	unsigned short numChannels;
 	unsigned long samplesPerSec;
-	unsigned long bytesPerSec;
-	unsigned short blockAlign;
+	//unsigned long bytesPerSec;
+	//unsigned short blockAlign;
 	unsigned short bitsPerSample;
-	unsigned short extSize;			// Should be 0
-	unsigned char subchunk2Id[4];	// "dpds"
-	unsigned long subchunk2Size;	// size of dpds chunk
-	unsigned long* subchunk2Data;
+	//unsigned short extSize;        // Should be 0
+	//unsigned char subchunk2Id[4];  // "dpds"
+	unsigned long subchunk2Size;     // length of dpds chunk
+	unsigned long* subchunk2Data;    // dpds data
 };
 
 
@@ -125,7 +121,7 @@ private:
 		// Read in the beginning of the xWMA header (up to XWMA)
 		XwmaHeader hdr = {};
 		int bufInd = startIndex;
-		hdr.chunkSize = ReadLong(buffer, bufInd, length);
+		bufInd += 4; // chunkSize
 
 		// Early exit if bad file type
 		if (std::strncmp(buffer + bufInd, "XWMA", 4) != 0) {
@@ -135,16 +131,22 @@ private:
 		}
 
 		// Read in the rest of the header
-		memcpy(hdr.XWMA, buffer + bufInd, 4); bufInd += 4;
-		memcpy(hdr.subchunk1Id, buffer + bufInd, 4); bufInd += 4;
-		hdr.subchunk1Size = ReadLong(buffer, bufInd, length); 
-		hdr.format = ReadShort(buffer, bufInd, length);
-		hdr.numChannels = ReadShort(buffer, bufInd, length);
-		hdr.samplesPerSec = ReadLong(buffer, bufInd, length);
-		hdr.bytesPerSec = ReadLong(buffer, bufInd, length);
-		hdr.blockAlign = ReadShort(buffer, bufInd, length);
-		hdr.bitsPerSample = ReadShort(buffer, bufInd, length);
-		hdr.extSize = ReadShort(buffer, bufInd, length);
+		try {
+			bufInd += 4; // XWMA
+			bufInd += 4; // subchunk1Id
+			bufInd += 4; // subchunk1Size
+			bufInd += 2; // format
+			hdr.numChannels = ReadShort(buffer, bufInd, length);
+			hdr.samplesPerSec = ReadLong(buffer, bufInd, length);
+			bufInd += 4; // bytesPerSec
+			bufInd += 2; // blockAlign
+			hdr.bitsPerSample = ReadShort(buffer, bufInd, length);
+			bufInd += 2; // extSize
+		} catch (std::exception& e) {
+			std::cerr << e.what() << std::endl;
+			delete[] buffer;
+			return ERROR;
+		}
 		
 		// Break out early if no dpds data
 		if (std::strncmp(buffer + bufInd, "dpds", 4) != 0) {
@@ -154,11 +156,18 @@ private:
 		}
 
 		// Read in the dpds data
-		memcpy(hdr.subchunk2Id, buffer + bufInd, 4); bufInd += 4;
-		hdr.subchunk2Size = ReadLong(buffer, bufInd, length) / 4;
-		hdr.subchunk2Data = new unsigned long[hdr.subchunk2Size];
-		for (unsigned int i = 0; i < hdr.subchunk2Size; i++) {
-			hdr.subchunk2Data[i] = ReadLong(buffer, bufInd, length);
+		try {
+			bufInd += 4; // subchunk2Id
+			hdr.subchunk2Size = ReadLong(buffer, bufInd, length) / 4;
+			hdr.subchunk2Data = new unsigned long[hdr.subchunk2Size];
+			for (unsigned int i = 0; i < hdr.subchunk2Size; i++) {
+				hdr.subchunk2Data[i] = ReadLong(buffer, bufInd, length);
+			}
+		} catch (std::exception& e) {
+			std::cerr << e.what() << std::endl;
+			if (hdr.subchunk2Data) delete[] hdr.subchunk2Data;
+			delete[] buffer;
+			return ERROR;
 		}
 
 		// Calculate the duration in seconds
@@ -180,12 +189,12 @@ private:
 	 * @param startIndex: Index to start in the buffer. THIS WILL BE INCREMENTED
 	 *					  BY 2 AS A RESULT OF THIS FUNCTION.
 	 * @param bufLen: Length of the buffer as a whole
-	 * @return: unsigned short representation of the 2 bytes
+	 * @return: unsigned short representation of the 2 bytes, or throws an
+	 *		    exception on error
 	 */
 	static unsigned short ReadShort(char* buffer, int& startIndex, int bufLen) {
 		if (startIndex + 1 >= bufLen) {
-			std::cerr << "Not enough space in buffer for short!" << std::endl;
-			return -1;
+			throw std::runtime_error("Not enough space in buffer for short!");
 		}
 
 		unsigned char rightBits = buffer[startIndex++];
@@ -202,12 +211,12 @@ private:
 	 * @param startIndex: Index to start in the buffer. THIS WILL BE INCREMENTED
 	 *					  BY 4 AS A RESULT OF THIS FUNCTION.
 	 * @param bufLen: Length of the buffer as a whole
-	 * @return: unsigned long representation of the 4 bytes
+	 * @return: unsigned long representation of the 4 bytes, or throws an 
+	 *			exception on error
 	 */
 	static unsigned long ReadLong(char* buffer, int& startIndex, int bufLen) {
 		if (startIndex + 3 >= bufLen) {
-			std::cerr << "Not enough space in buffer for long!" << std::endl;
-			return -1;
+			throw std::runtime_error("Not enough space in buffer for long!");
 		}
 
 		// Note: startIndex is modified by each call to ReadShort()

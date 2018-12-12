@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iostream>
 #include <stddef.h>
+#include <sstream>
 
 /* 
  * Contains all of the data from the xWMA (RIFF) header, up until the "data"
@@ -32,7 +33,6 @@ struct XwmaHeader {
 	unsigned long subchunk2Size;   // Needed for length calc. Length of dpds chunk.
 	unsigned long* subchunk2Data;  // Needed for length calc. Dpds data
 };
-
 
 /* 
  * Static class used to get the length in seconds of a xWMA audio file embedded
@@ -73,6 +73,31 @@ public:
 		return ComputeLength(is);
 	}
 
+	/* 
+	 * Gets the length of the xWMA audio in seconds. Raw data version.
+	 *
+	 * @param data: Raw FUZ data
+	 * @param length: Length of FUZ data
+	 * @return: Duration in seconds, or -1.0 on error
+	 */
+	static float GetAudioLengthInSeconds(const uint8_t* data, size_t length) {
+		if (data == NULL) return FAILURE;
+
+		/*
+		 * TODO: This copies the data TWICE, which is bad juju. Even though this
+		 * is only working with files KB in size, I should find a way that's more
+		 * memory efficient.
+		 * 
+		 * A possible solution to this could be to make a custom istream class that
+		 * also uses a custom streambuf, or (more likely) to overload ComputeLength()
+		 * to operate on the raw data.
+		 */
+		std::string s((char*)data, length);
+		std::istringstream iss(s);
+		
+		return ComputeLength(iss);
+	}
+
 private:
 	// The compiler will add 2 bytes of padding after subchunk2Id to align 
 	// subchunk2Size
@@ -91,7 +116,7 @@ private:
 		char* buffer = new char[HEADER_SIZE_BYTES];
 
 		// Buffer to hold the dynamic dpds data
-		char* dpdsBuffer;
+		char* dpdsBuffer = NULL;
 
 		// There should be a 4 byte length of the LIP portion 9 bytes in, so read 12.
 		is.read(buffer, 12);
